@@ -1,0 +1,116 @@
+PROGRAM ExecuteScripts
+VAR
+	xInit: BOOL:= TRUE;
+	xStartUp: BOOL:= TRUE;
+	messageSend: BOOL := FALSE;
+	messageFlag1: BOOL := FALSE;
+	dwCopySize: DWORD;
+	szCommand : STRING(200);
+	fbTimer : TON;
+	messageDelay2 : TON;
+	messageDelay3 : TON;
+	szStdOout : STRING(1000);	
+	dutResult : RTS_IEC_RESULT;
+	iState: INT:= 1;
+	sStates: INT:= 4;
+		
+END_VAR
+
+(*
+//	import subprocess
+//	subprocess.call('echo "Fault on System" | mail -s "Alarm" russellparton53@gmail.com', shell = True)
+
+//	import subprocess
+//	subprocess.call('mpack -s "Last Run Usage" /home/pi/Documents/LastIrrigationCycle.csv russellparton53@gmail.com', shell = True)
+
+//	import subprocess
+//	subprocess.call('mpack -s "Water Usage Report" /home/pi/Documents/WaterUsage.csv russellparton53@gmail.com', shell = True)
+
+
+
+// cd /usr/bin
+
+// sudo nano LastIrrigationCycle.py
+
+// "
+// #!/usr/bin/python
+// import subprocess
+//
+// subprocess.call('', shell = True)
+// "
+ 
+// sudo chmod +x LastIrrigationCycle.py
+
+// ./LastIrrigationCycle.py
+
+
+
+// sudo nano /etc/CODESYSControl.cfg
+
+// [SysProcess]
+// Command=AllowAll
+*)
+
+// On Startup
+IF xInit THEN
+	// python scripts
+	SysFileCopy('/var/opt/codesys/alarm.py', '/var/opt/codesys/PlcLogic/Application/alarm.py', ADR(dwCopySize));
+	SysFileCopy('/var/opt/codesys/LastIrrigationCycle.py', '/var/opt/codesys/PlcLogic/Application/LastIrrigationCycle.py', ADR(dwCopySize));
+	SysFileCopy('/var/opt/codesys/reboot.py', '/var/opt/codesys/PlcLogic/Application/reboot.py', ADR(dwCopySize));
+	SysFileCopy('/var/opt/codesys/WaterUsage.py', '/var/opt/codesys/PlcLogic/Application/WaterUsage.py', ADR(dwCopySize));
+	
+	// make these scripts executable
+	SysProcess.SysProcessExecuteCommand2(pszCommand:='chmod +x *.py', pszStdOut:=szStdOout, udiStdOutLen:= SIZEOF(szStdOout), pResult := ADR(dutResult));
+	xInit:=FALSE;
+END_IF
+
+CASE iState OF
+	1:
+		szCommand:= 'sudo python alarm.py';
+	2:
+		szCommand:= 'sudo python LastIrrigationCycle.py';
+	3:
+		szCommand:= 'sudo python reboot.py';
+	4:
+		szCommand:= 'sudo python WaterUsage.py';
+END_CASE
+
+fbTimer(IN:= MessageSend, PT:=T#10S); 	// Pause before sending emails
+
+IF fbTimer.Q THEN
+	fbTimer(IN:= FALSE);
+	MessageSend := FALSE;
+	SysProcess.SysProcessExecuteCommand2(pszCommand:=szCommand, pszStdOut:=szStdOout, udiStdOutLen:= SIZEOF(szStdOout), pResult := ADR(dutResult));
+	
+END_IF
+
+// Case 1 - Alarm.py
+IF GVL01.SystemWarning AND NOT MessageSend AND NOT messageFlag1 THEN
+	iState := 1;
+	MessageSend := TRUE;
+	messageFlag1 := TRUE;
+END_IF
+
+IF NOT GVL01.SystemWarning THEN
+	messageFlag1 := FALSE;
+END_IF
+
+// Case 2 - LastIrrigationCycle.py
+messageDelay2(IN:= GVL01.IrrCSVSend, PT:=T#10S);
+
+IF messageDelay2.Q AND NOT MessageSend THEN
+	iState := 2;
+	MessageSend := TRUE;
+	GVL01.IrrCSVSend := FALSE;
+END_IF
+
+// Case 3 - reboot.py
+messageDelay3(IN:= GVL01.RebootPi, PT:=T#10S);
+
+IF messageDelay3.Q AND NOT MessageSend THEN
+	iState := 3;
+	MessageSend := TRUE;
+	GVL01.RebootPi := FALSE;
+END_IF
+
+// Case 4 - WaterUsage.py
